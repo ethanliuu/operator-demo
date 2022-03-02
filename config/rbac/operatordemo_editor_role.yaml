@@ -1,0 +1,24 @@
+# permissions for end users to edit operatordemoes.
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: operatordemo-editor-role
+rules:
+- apiGroups:
+  - ethanliuu.ethanliu.io
+  resources:
+  - operatordemoes
+  verbs:
+  - create
+  - delete
+  - get
+  - list
+  - patch
+  - update
+  - watch
+- apiGroups:
+  - ethanliuu.ethanliu.io
+  resources:
+  - operatordemoes/status
+  verbs:
+  - get

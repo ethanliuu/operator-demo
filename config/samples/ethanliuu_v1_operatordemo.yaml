@@ -1,0 +1,8 @@
+apiVersion: ethanliuu.ethanliu.io/v1
+kind: OperatorDemo
+metadata:
+  name: operatordemo-sample
+spec:
+  image: nginx:latest
+  replicas: 2
+  port: 80

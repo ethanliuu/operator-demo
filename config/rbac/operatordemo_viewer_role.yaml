@@ -1,0 +1,20 @@
+# permissions for end users to view operatordemoes.
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: operatordemo-viewer-role
+rules:
+- apiGroups:
+  - ethanliuu.ethanliu.io
+  resources:
+  - operatordemoes
+  verbs:
+  - get
+  - list
+  - watch
+- apiGroups:
+  - ethanliuu.ethanliu.io
+  resources:
+  - operatordemoes/status
+  verbs:
+  - get
