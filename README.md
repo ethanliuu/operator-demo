@@ -10,6 +10,7 @@ go1.17.1 darwin/amd64
 KubeBuilderVersion:"3.3.0"
 
 ```
+## 创建 operator
 step1
 ```shell
 # 创建项目目录
@@ -38,7 +39,8 @@ step3
 type OperatorDemoSpec struct {
 	Image    string `json:"image"`
 	Replicas int32  `json:"replicas"`
-	Port     int32  `json:"port"`
+	// omitempty 非必选
+	Port     int32  `json:"port,omitempty"`
 }
 ```
 step4
@@ -172,5 +174,232 @@ pod/operatordemo-sample-78bffc997-d8sd2                 1/1     Running   0     
 
 NAME                                                       TYPE        CLUSTER-IP       EXTERNAL-IP   PORT(S)    AGE
 service/operatordemo-sample                                ClusterIP   10.110.32.102    <none>        80/TCP     31m
+```
+## 创建webhook
+webhook是什么？
+
+我理解的 webhook 就是在 controller 做处理之前，由 webhook 做一些字段的合法性校验，字段的默认值填充，确保一份真实、可用的资源清单交给 controller。
+
+部署 cert-manager
+```shell
+$ k apply -f https://github.com/cert-manager/cert-manager/releases/download/v1.7.1/cert-manager.yaml
+```
+添加 webhook
+```shell
+$ kb create webhook --group ethanliuu --version v1 --kind OperatorDemo --defaulting --programmatic-validation
+```
+修改webhook逻辑
+```go
+import (
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
+	"k8s.io/apimachinery/pkg/runtime/schema"
+
+	"k8s.io/apimachinery/pkg/runtime"
+	"k8s.io/apimachinery/pkg/util/validation/field"
+	ctrl "sigs.k8s.io/controller-runtime"
+	logf "sigs.k8s.io/controller-runtime/pkg/log"
+	"sigs.k8s.io/controller-runtime/pkg/webhook"
+)
+
+// log is for logging in this package.
+var operatordemolog = logf.Log.WithName("operatordemo-resource")
+
+// 定义启动方法
+func (r *OperatorDemo) SetupWebhookWithManager(mgr ctrl.Manager) error {
+	return ctrl.NewWebhookManagedBy(mgr).
+		For(r).
+		Complete()
+}
+
+//+kubebuilder:webhook:path=/mutate-ethanliuu-ethanliu-io-v1-operatordemo,mutating=true,failurePolicy=fail,sideEffects=None,groups=ethanliuu.ethanliu.io,resources=operatordemoes,verbs=create;update,versions=v1,name=moperatordemo.kb.io,admissionReviewVersions=v1
+
+// 申明 defaulter
+var _ webhook.Defaulter = &OperatorDemo{}
+
+// 默认数据操作
+// Default implements webhook.Defaulter so a webhook will be registered for the type
+func (r *OperatorDemo) Default() {
+	operatordemolog.Info("default", "name", r.Name)
+	//定义如果Port为空时，给予定义默认值
+	if r.Spec.Port == 0 {
+		r.Spec.Port = 80
+		operatordemolog.Info("set default value 80 for port")
+	}
+}
+
+//+kubebuilder:webhook:path=/validate-ethanliuu-ethanliu-io-v1-operatordemo,mutating=false,failurePolicy=fail,sideEffects=None,groups=ethanliuu.ethanliu.io,resources=operatordemoes,verbs=create;update,versions=v1,name=voperatordemo.kb.io,admissionReviewVersions=v1
+
+// 申明validator
+var _ webhook.Validator = &OperatorDemo{}
+
+// 创建 Validate 函数，创建时候要处理的逻辑
+// ValidateCreate implements webhook.Validator so a webhook will be registered for the type
+func (r *OperatorDemo) ValidateCreate() error {
+	operatordemolog.Info("validate create", "name", r.Name)
+	return r.ValidateOperatorDemo()
+}
+
+// 更新 Validate 函数，更新时候要处理的逻辑
+// ValidateUpdate implements webhook.Validator so a webhook will be registered for the type
+func (r *OperatorDemo) ValidateUpdate(old runtime.Object) error {
+	operatordemolog.Info("validate update", "name", r.Name)
+	return r.ValidateOperatorDemo()
+}
+
+// 删除 Validate 函数，删除时候要处理的逻辑
+// ValidateDelete implements webhook.Validator so a webhook will be registered for the type
+func (r *OperatorDemo) ValidateDelete() error {
+	operatordemolog.Info("validate delete", "name", r.Name)
+	return nil
+}
+
+// 判断规则是否通过，如果有不通过的则返回 apierrors
+// 在 create 和 update 中执行该函数
+func (r *OperatorDemo) ValidateOperatorDemo() error {
+	var allErrs field.ErrorList
+	if err := r.ValidatePort(); err != nil {
+		allErrs = append(allErrs, err)
+	}
+	if len(allErrs) == 0 {
+		return nil
+	}
+	return apierrors.NewInvalid(schema.GroupKind{
+		Group: "ethanliuu.ethanliu.io",
+		Kind:  "OperatorDemo",
+	}, r.Name, allErrs)
+}
+// 定义准入规则，不允许 port 为 65535
+func (r *OperatorDemo) ValidatePort() *field.Error {
+	if r.Spec.Port == 65535 {
+		return field.Invalid(field.NewPath("spec").Child("schedule"), r.Spec.Port, "port 不能为 65535")
+	}
+	return nil
+}
+```
+**修改config**
+
+**config/default/kustomization.yaml**
+
+因为需要使用 webhook，所以需要打开 webhook 和 cert-manager的注释
+```yaml
+# Adds namespace to all resources.
+namespace: operator-demo-system
+
+# Value of this field is prepended to the
+# names of all resources, e.g. a deployment named
+# "wordpress" becomes "alices-wordpress".
+# Note that it should also match with the prefix (text before '-') of the namespace
+# field above.
+namePrefix: operator-demo-
+
+# Labels to add to all resources and selectors.
+#commonLabels:
+#  someName: someValue
+
+bases:
+- ../crd
+- ../rbac
+- ../manager
+# [WEBHOOK] To enable webhook, uncomment all the sections with [WEBHOOK] prefix including the one in
+# crd/kustomization.yaml
+- ../webhook
+# [CERTMANAGER] To enable cert-manager, uncomment all sections with 'CERTMANAGER'. 'WEBHOOK' components are required.
+- ../certmanager
+# [PROMETHEUS] To enable prometheus monitor, uncomment all sections with 'PROMETHEUS'.
+#- ../prometheus
+
+patchesStrategicMerge:
+# Protect the /metrics endpoint by putting it behind auth.
+# If you want your controller-manager to expose the /metrics
+# endpoint w/o any authn/z, please comment the following line.
+- manager_auth_proxy_patch.yaml
+
+# Mount the controller config file for loading manager configurations
+# through a ComponentConfig type
+#- manager_config_patch.yaml
+
+# [WEBHOOK] To enable webhook, uncomment all the sections with [WEBHOOK] prefix including the one in
+# crd/kustomization.yaml
+- manager_webhook_patch.yaml
+
+# [CERTMANAGER] To enable cert-manager, uncomment all sections with 'CERTMANAGER'.
+# Uncomment 'CERTMANAGER' sections in crd/kustomization.yaml to enable the CA injection in the admission webhooks.
+# 'CERTMANAGER' needs to be enabled to use ca injection
+- webhookcainjection_patch.yaml
+
+# the following config is for teaching kustomize how to do var substitution
+vars:
+- name: CERTIFICATE_NAMESPACE # namespace of the certificate CR
+  objref:
+    kind: Certificate
+    group: cert-manager.io
+    version: v1
+    name: serving-cert # this name should match the one in certificate.yaml
+  fieldref:
+    fieldpath: metadata.namespace
+- name: CERTIFICATE_NAME
+  objref:
+    kind: Certificate
+    group: cert-manager.io
+    version: v1
+    name: serving-cert # this name should match the one in certificate.yaml
+- name: SERVICE_NAMESPACE # namespace of the service
+  objref:
+    kind: Service
+    version: v1
+    name: webhook-service
+  fieldref:
+    fieldpath: metadata.namespace
+- name: SERVICE_NAME
+  objref:
+    kind: Service
+    version: v1
+    name: webhook-service
+
+```
+
+config/crd/kustomization.yaml
+```yaml
+# This kustomization.yaml is not intended to be run by itself,
+# since it depends on service name and namespace that are out of this kustomize package.
+# It should be run by config/default
+resources:
+- bases/ethanliuu.ethanliu.io_operatordemoes.yaml
+#+kubebuilder:scaffold:crdkustomizeresource
+
+patchesStrategicMerge:
+# [WEBHOOK] To enable webhook, uncomment all the sections with [WEBHOOK] prefix.
+# patches here are for enabling the conversion webhook for each CRD
+- patches/webhook_in_operatordemoes.yaml
+#+kubebuilder:scaffold:crdkustomizewebhookpatch
+
+# [CERTMANAGER] To enable cert-manager, uncomment all the sections with [CERTMANAGER] prefix.
+# patches here are for enabling the CA injection for each CRD
+- patches/cainjection_in_operatordemoes.yaml
+#+kubebuilder:scaffold:crdkustomizecainjectionpatch
+
+# the following config is for teaching kustomize how to do kustomization for CRDs.
+configurations:
+- kustomizeconfig.yaml
+```
+**编译**
+```shell
+$ export IMG=registry.cn-beijing.aliyuncs.com/ethanliuu/operator-demo-webhook:1.0.2
+$ make docker-build docker-push
+```
+**部署**
+```shell
+$ make deploy
+```
+测试 Default
+```shell
+1.6462875937064295e+09	INFO	operatordemo-resource	default	{"name": "operatordemo-sample"}
+1.646287593706446e+09	INFO	operatordemo-resource	set default value 80 for port
+```
+验证准入
+```shell
+$ k apply -f config/samples/ethanliuu_v1_operatordemo.yaml 
+The OperatorDemo "operatordemo-sample" is invalid: spec.schedule: Invalid value: 65535: port 不能为 65535
+
 ```
 [参考好朋友的项目](https://github.com/barrettzjh/test-operator)

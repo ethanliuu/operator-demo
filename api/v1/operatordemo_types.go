@@ -29,7 +29,8 @@ type OperatorDemoSpec struct {
 	// Important: Run "make" to regenerate code after modifying this file
 	Image    string `json:"image"`
 	Replicas int32  `json:"replicas"`
-	Port     int32  `json:"port"`
+	// omitempty 非必选
+	Port int32 `json:"port,omitempty"`
 }
 
 // OperatorDemoStatus defines the observed state of OperatorDemo

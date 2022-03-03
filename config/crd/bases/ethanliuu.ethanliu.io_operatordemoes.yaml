@@ -40,6 +40,7 @@ spec:
                   Important: Run "make" to regenerate code after modifying this file'
                 type: string
               port:
+                description: omitempty 非必选
                 format: int32
                 type: integer
               replicas:
@@ -47,7 +48,6 @@ spec:
                 type: integer
             required:
             - image
-            - port
             - replicas
             type: object
           status:
